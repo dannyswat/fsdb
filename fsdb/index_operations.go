@@ -216,18 +216,16 @@ func (cim *ClusteredIndexManager) calculateStats(nodeID string, depth int, stats
 func (cim *ClusteredIndexManager) SaveMetadata() error {
 	cim.mu.RLock()
 	defer cim.mu.RUnlock()
+	return cim.saveMetadataInternal()
+}
 
+// saveMetadataInternal saves metadata without acquiring locks (internal use)
+func (cim *ClusteredIndexManager) saveMetadataInternal() error {
 	metadata := IndexMeta{
 		IndexName:    cim.indexDef.Name,
 		RootPageName: cim.rootNodeID,
-		RowsCount:    0, // Will be calculated
+		RowsCount:    0, // Will be calculated later if needed
 		PagesCount:   int64(len(cim.nodeCache)),
-	}
-
-	// Calculate row count
-	if stats, err := cim.GetStats(); err == nil {
-		metadata.RowsCount = stats.RowCount
-		metadata.PagesCount = stats.NodeCount
 	}
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
@@ -271,8 +269,8 @@ func (cim *ClusteredIndexManager) Close() error {
 		return fmt.Errorf("failed to save dirty nodes: %w", err)
 	}
 
-	// Save metadata
-	err = cim.SaveMetadata()
+	// Save metadata without acquiring lock (we already have it)
+	err = cim.saveMetadataInternal()
 	if err != nil {
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}

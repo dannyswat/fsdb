@@ -60,6 +60,7 @@ func (cim *ClusteredIndexManager) BuildIndex(rows []map[string]any) error {
 	rootID := cim.generateNodeID()
 	cim.rootNodeID = rootID
 	rootNode := NewLeafNode(rootID, cim.indexDef.PageSize)
+	cim.nodeCache[rootID] = rootNode
 
 	// Insert sorted rows into B+ tree
 	for _, row := range sortedRows {
