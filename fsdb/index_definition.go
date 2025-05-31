@@ -7,4 +7,5 @@ type IndexDefinition struct {
 	Includes      []string               `json:"includes"`
 	PartialFilter []EqualFilterCondition `json:"partial_filter"`
 	PageSize      int                    `json:"page_size"`
+	IsClustered   bool                   `json:"is_clustered"`
 }

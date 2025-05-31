@@ -1,9 +1,15 @@
 package fsdb
 
+import (
+	"time"
+)
+
 type CollectionSchema struct {
-	Name                string             `json:"name"`
-	Description         string             `json:"description"`
-	Columns             []ColumnDefinition `json:"columns"`
-	ClusteredIndex      IndexDefinition    `json:"primary_index"`
-	NonClusteredIndexes []IndexDefinition  `json:"indexes"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Columns     []ColumnDefinition `json:"columns"`
+	Indexes     []IndexDefinition  `json:"indexes"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 }
