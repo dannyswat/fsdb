@@ -40,7 +40,7 @@ func NewIndexManager(basePath string, indexDef IndexDefinition, schema Collectio
 		indexPath: indexPath,
 		Storage:   storage,
 	}
-	im.BTree = NewBTree(storage, "", indexDef.PageSize)
+	im.BTree = NewBTree(storage, "", indexDef.PageSize, indexDef.IsClustered)
 	return im, nil
 }
 
@@ -71,7 +71,7 @@ func (im *IndexManager) Build(data []map[string]any) error {
 			os.RemoveAll(filepath.Join(im.indexPath, f.Name()))
 		}
 	}
-	im.BTree = NewBTree(im.Storage, "", im.indexDef.PageSize)
+	im.BTree = NewBTree(im.Storage, "", im.indexDef.PageSize, im.indexDef.IsClustered)
 
 	// Sort data by index keys if needed (not implemented here)
 	for _, row := range data {

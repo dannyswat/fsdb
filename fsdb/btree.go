@@ -9,17 +9,19 @@ import (
 
 // BTree provides B+ tree operations using pluggable node storage.
 type BTree struct {
-	storage  BTreeNodeStorage
-	rootID   string
-	pageSize int
+	storage     BTreeNodeStorage
+	rootID      string
+	pageSize    int
+	isUniqueKey bool // true if this is a clustered index
 }
 
 // NewBTree creates a new B+ tree with the given storage provider and page size.
-func NewBTree(storage BTreeNodeStorage, rootID string, pageSize int) *BTree {
+func NewBTree(storage BTreeNodeStorage, rootID string, pageSize int, isUniqueKey bool) *BTree {
 	return &BTree{
-		storage:  storage,
-		rootID:   rootID,
-		pageSize: pageSize,
+		storage:     storage,
+		rootID:      rootID,
+		pageSize:    pageSize,
+		isUniqueKey: isUniqueKey,
 	}
 }
 
@@ -31,6 +33,15 @@ func (bt *BTree) RootID() string {
 // Insert inserts a key-value pair into the B+ tree.
 func (bt *BTree) Insert(key []any, value any) error {
 	log.Printf("Insert: key=%#v, value=%#v", key, value)
+	if bt.isUniqueKey {
+		results, err := bt.Search(key)
+		if err != nil {
+			return err
+		}
+		if len(results) > 0 {
+			return fmt.Errorf("duplicate key not allowed in clustered index: %#v", key)
+		}
+	}
 	if bt.rootID == "" {
 		log.Printf("Insert: creating new root leaf node")
 		// Create root as a new leaf node
@@ -60,8 +71,17 @@ func (bt *BTree) insertRecursive(node *BTreeNode, key []any, value any) error {
 		for pos < len(node.Keys) && compareKeys(key, node.Keys[pos]) > 0 {
 			pos++
 		}
-		// If key already exists, insert after all existing duplicates (for non-unique index)
-		for pos < len(node.Keys) && compareKeys(key, node.Keys[pos]) == 0 {
+		// Check for duplicate key if clustered (unique key)
+		if bt.isUniqueKey {
+			// Check all keys for duplicate (not just neighbors)
+			for i := 0; i < len(node.Keys); i++ {
+				if compareKeys(key, node.Keys[i]) == 0 {
+					return fmt.Errorf("duplicate key not allowed in clustered index: %#v", key)
+				}
+			}
+		}
+		// For non-clustered, allow duplicates: insert after all existing duplicates
+		for !bt.isUniqueKey && pos < len(node.Keys) && compareKeys(key, node.Keys[pos]) == 0 {
 			pos++
 		}
 		log.Printf("insertRecursive: inserting at pos=%d, key=%#v, value=%#v", pos, key, value)

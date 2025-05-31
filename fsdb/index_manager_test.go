@@ -87,8 +87,11 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 
 	// Insert duplicate key (should allow, unless unique constraint is enforced)
 	err = im.Insert([]any{2}, map[string]any{"id": 2, "name": "B2"})
-	if err != nil {
-		t.Errorf("Insert duplicate key failed: %v", err)
+	if err == nil {
+		t.Errorf("Expected error on inserting duplicate key, but got none")
+		return
+	} else {
+		fmt.Printf("Insert duplicate key failed as expected: %v\n", err)
 	}
 
 	// Delete a row (should delete all records with key=2)
