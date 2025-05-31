@@ -2,7 +2,7 @@ package fsdb
 
 import (
 	"encoding/json"
-	"os"
+	"errors"
 	"path/filepath"
 	"sync"
 	"time"
@@ -10,17 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
+var (
+	errCollectionExists   = errors.New("collection already exists")
+	errCollectionNotExist = errors.New("collection does not exist")
+	errInvalidCollection  = errors.New("invalid collection")
+)
+
 // Database manages collections (schemas and their associated indexes).
 // It handles creation, deletion, and modification of collection schemas.
 type Database struct {
-	mu          sync.RWMutex
-	basePath    string                 // Base path where all collections are stored (e.g., /data/mydb)
-	collections map[string]*Collection // Map of collection name to Collection object
+	mu           sync.RWMutex
+	basePath     string                 // Base path where all collections are stored (e.g., /data/mydb)
+	collections  map[string]*Collection // Map of collection name to Collection object
+	fileProvider IFileProvider          // Injected file provider
 }
 
 func (db *Database) loadExistingCollections() error {
-	// Load existing collection schemas from disk
-	files, err := os.ReadDir(db.basePath)
+	files, err := db.fileProvider.ReadDirectory(db.basePath)
 	if err != nil {
 		return err
 	}
@@ -28,20 +34,21 @@ func (db *Database) loadExistingCollections() error {
 	for _, file := range files {
 		if file.IsDir() {
 			collectionPath := filepath.Join(db.basePath, file.Name())
-			schemaFilePath := filepath.Join(collectionPath, "schema.json")
-			data, err := os.ReadFile(schemaFilePath)
+			exists, err := db.fileProvider.FileExists(collectionPath, "schema.json")
 			if err != nil {
-				if os.IsNotExist(err) {
-					continue // Skip if schema file does not exist
-				}
 				return err
 			}
-
+			if !exists {
+				continue
+			}
+			data, err := db.fileProvider.ReadFile(collectionPath, "schema.json")
+			if err != nil {
+				return err
+			}
 			var schema CollectionSchema
 			if err := json.Unmarshal(data, &schema); err != nil {
 				return err
 			}
-
 			collection, err := NewCollection(collectionPath, schema)
 			if err != nil {
 				return err
@@ -55,15 +62,15 @@ func (db *Database) loadExistingCollections() error {
 // NewDatabase creates a new CollectionManager.
 // basePath is the root directory where all database data will be stored.
 func NewDatabase(basePath string) (*Database, error) {
-	if err := os.MkdirAll(basePath, 0755); err != nil {
+	fileProvider := &FileProvider{}
+	if err := fileProvider.CreateDirectory(basePath); err != nil {
 		return nil, err
 	}
 	db := &Database{
-		basePath:    basePath,
-		collections: make(map[string]*Collection),
+		basePath:     basePath,
+		collections:  make(map[string]*Collection),
+		fileProvider: fileProvider,
 	}
-
-	// TODO: Load existing collection schemas from disk
 	if err := db.loadExistingCollections(); err != nil {
 		return nil, err
 	}
@@ -77,46 +84,38 @@ func (db *Database) CreateCollection(schema CollectionSchema) error {
 	defer db.mu.Unlock()
 
 	collectionPath := filepath.Join(db.basePath, schema.Name)
-	if _, err := os.Stat(collectionPath); !os.IsNotExist(err) {
-		return os.ErrExist // Collection already exists
-	}
-
-	if err := os.MkdirAll(collectionPath, 0755); err != nil {
+	dirExists, err := db.fileProvider.DirectoryExists(collectionPath)
+	if err != nil {
 		return err
 	}
-
-	// Validate schema (e.g., ensure there's exactly one clustered index)
+	if dirExists {
+		return errCollectionExists
+	}
+	if err := db.fileProvider.CreateDirectory(collectionPath); err != nil {
+		return err
+	}
 	if err := validateSchema(&schema); err != nil {
-		// Clean up created directory if schema is invalid
-		os.RemoveAll(collectionPath)
+		db.fileProvider.DeleteDirectory(collectionPath)
 		return err
 	}
-
-	// Save the schema to a file (e.g., schema.json) within the collection's directory
-	schema.ID = uuid.New().String() // Assign a unique ID to the schema
+	schema.ID = uuid.New().String()
 	schema.CreatedAt = time.Now()
 	schema.UpdatedAt = time.Now()
 
-	schemaFilePath := filepath.Join(collectionPath, "schema.json")
 	data, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
-		os.RemoveAll(collectionPath) // Clean up
+		db.fileProvider.DeleteDirectory(collectionPath)
 		return err
 	}
-	if err := os.WriteFile(schemaFilePath, data, 0644); err != nil {
-		os.RemoveAll(collectionPath) // Clean up
+	if err := db.fileProvider.WriteFile(collectionPath, "schema.json", data); err != nil {
+		db.fileProvider.DeleteDirectory(collectionPath)
 		return err
 	}
-
-	// TODO: Initialize IndexManager for the clustered index
-	// TODO: Initialize IndexManagers for any non-clustered indexes defined in the schema
-
 	collection, err := NewCollection(collectionPath, schema)
 	if err != nil {
 		return err
 	}
 	db.collections[schema.Name] = collection
-
 	return nil
 }
 
@@ -126,16 +125,17 @@ func (db *Database) GetCollectionSchema(collectionName string) (*CollectionSchem
 	defer db.mu.RUnlock()
 
 	collectionPath := filepath.Join(db.basePath, collectionName)
-	schemaFilePath := filepath.Join(collectionPath, "schema.json")
-
-	data, err := os.ReadFile(schemaFilePath)
+	exists, err := db.fileProvider.FileExists(collectionPath, "schema.json")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, os.ErrNotExist // Collection schema not found
-		}
 		return nil, err
 	}
-
+	if !exists {
+		return nil, errCollectionNotExist
+	}
+	data, err := db.fileProvider.ReadFile(collectionPath, "schema.json")
+	if err != nil {
+		return nil, err
+	}
 	var schema CollectionSchema
 	if err := json.Unmarshal(data, &schema); err != nil {
 		return nil, err
@@ -154,27 +154,16 @@ func (db *Database) UpdateCollectionSchema(collectionName string, updatedSchema 
 	if err != nil {
 		return err
 	}
-
-	// Basic validation: Name and ID should not change
 	if currentSchema.Name != updatedSchema.Name || currentSchema.ID != updatedSchema.ID {
-		return os.ErrInvalid // Or a more specific error
+		return errInvalidCollection
 	}
-
-	// TODO: Implement more sophisticated schema update logic:
-	// - Adding/removing columns (may require data migration)
-	// - Adding/removing indexes (may require re-indexing)
-	// - Modifying existing column definitions (e.g., changing data type - very complex)
-
 	updatedSchema.UpdatedAt = time.Now()
-
 	collectionPath := filepath.Join(db.basePath, collectionName)
-	schemaFilePath := filepath.Join(collectionPath, "schema.json")
 	data, err := json.MarshalIndent(updatedSchema, "", "  ")
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(schemaFilePath, data, 0644)
+	return db.fileProvider.WriteFile(collectionPath, "schema.json", data)
 }
 
 // DeleteCollection removes a collection and all its data.
@@ -183,12 +172,14 @@ func (db *Database) DeleteCollection(collectionName string) error {
 	defer db.mu.Unlock()
 
 	collectionPath := filepath.Join(db.basePath, collectionName)
-	if _, err := os.Stat(collectionPath); os.IsNotExist(err) {
-		return os.ErrNotExist // Collection does not exist
+	dirExists, err := db.fileProvider.DirectoryExists(collectionPath)
+	if err != nil {
+		return err
 	}
-
-	// delete(db.collections, collectionName)
-	return os.RemoveAll(collectionPath)
+	if !dirExists {
+		return errCollectionNotExist
+	}
+	return db.fileProvider.DeleteDirectory(collectionPath)
 }
 
 // GetCollection loads a collection and its indexes by name.
@@ -206,7 +197,7 @@ func (db *Database) GetCollection(collectionName string) (*Collection, error) {
 // validateSchema performs basic validation on a CollectionSchema.
 func validateSchema(schema *CollectionSchema) error {
 	if schema.Name == "" {
-		return os.ErrInvalid // Collection name cannot be empty
+		return errInvalidCollection // Collection name cannot be empty
 	}
 
 	clusteredIndexCount := 0
@@ -224,7 +215,7 @@ func validateSchema(schema *CollectionSchema) error {
 	}
 
 	if clusteredIndexCount > 1 {
-		return os.ErrInvalid // Cannot have more than one clustered index
+		return errInvalidCollection // Cannot have more than one clustered index
 	}
 
 	// TODO: Add more validation rules:
@@ -269,7 +260,7 @@ func (c *Collection) Insert(row map[string]any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.clusteredIndex == nil {
-		return os.ErrInvalid // No clustered index defined
+		return errInvalidCollection
 	}
 	key := extractIndexKey(row, c.clusteredIndex.indexDef)
 	if err := c.clusteredIndex.Insert(key, row); err != nil {
@@ -289,7 +280,7 @@ func (c *Collection) Update(oldRow, newRow map[string]any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.clusteredIndex == nil {
-		return os.ErrInvalid
+		return errInvalidCollection
 	}
 	oldKey := extractIndexKey(oldRow, c.clusteredIndex.indexDef)
 	newKey := extractIndexKey(newRow, c.clusteredIndex.indexDef)
@@ -311,7 +302,7 @@ func (c *Collection) Delete(row map[string]any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.clusteredIndex == nil {
-		return os.ErrInvalid
+		return errInvalidCollection
 	}
 	key := extractIndexKey(row, c.clusteredIndex.indexDef)
 	if err := c.clusteredIndex.Delete(key); err != nil {
@@ -331,7 +322,7 @@ func (c *Collection) Find(key []any) ([]any, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.clusteredIndex == nil {
-		return nil, os.ErrInvalid
+		return nil, errInvalidCollection
 	}
 	return c.clusteredIndex.Search(key)
 }
