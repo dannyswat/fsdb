@@ -153,6 +153,18 @@ func (cm *CollectionManager) DeleteCollection(collectionName string) error {
 	return os.RemoveAll(collectionPath)
 }
 
+// GetCollection loads a collection and its indexes by name.
+func (cm *CollectionManager) GetCollection(collectionName string) (*Collection, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	collectionPath := filepath.Join(cm.basePath, collectionName)
+	schema, err := cm.GetCollectionSchema(collectionName)
+	if err != nil {
+		return nil, err
+	}
+	return NewCollection(collectionPath, *schema)
+}
+
 // validateSchema performs basic validation on a CollectionSchema.
 func validateSchema(schema *CollectionSchema) error {
 	if schema.Name == "" {
