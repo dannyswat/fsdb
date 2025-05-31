@@ -39,4 +39,12 @@ func main() {
 	collection.Insert(map[string]any{"id": 3, "name": "Charlie"})
 	collection.Insert(map[string]any{"id": 4, "name": "Diana"})
 	fmt.Println("Inserted 4 users")
+
+	results, err := collection.Find(nil)
+	if err != nil {
+		panic(err)
+	}
+	for _, user := range results {
+		fmt.Printf("User: %+v\n", user)
+	}
 }
