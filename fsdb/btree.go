@@ -2,7 +2,6 @@ package fsdb
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"time"
 )
@@ -32,7 +31,6 @@ func (bt *BTree) RootID() string {
 
 // Insert inserts a key-value pair into the B+ tree.
 func (bt *BTree) Insert(key []any, value any) error {
-	log.Printf("Insert: key=%#v, value=%#v", key, value)
 	if bt.isUniqueKey {
 		// Only check for duplicates if the tree is not empty
 		if bt.rootID != "" {
@@ -46,7 +44,6 @@ func (bt *BTree) Insert(key []any, value any) error {
 		}
 	}
 	if bt.rootID == "" {
-		log.Printf("Insert: creating new root leaf node")
 		// Create root as a new leaf node
 		root := NewBTreeNode(generateNodeID(), LeafNode, bt.pageSize, "")
 		root.Keys = append(root.Keys, key)
@@ -59,7 +56,6 @@ func (bt *BTree) Insert(key []any, value any) error {
 	}
 	root, err := bt.storage.LoadNode(bt.rootID)
 	if err != nil {
-		log.Printf("Insert: failed to load root node %s: %v", bt.rootID, err)
 		return err
 	}
 	return bt.insertRecursive(root, key, value)
@@ -67,7 +63,6 @@ func (bt *BTree) Insert(key []any, value any) error {
 
 // insertRecursive handles recursive insert and node splitting.
 func (bt *BTree) insertRecursive(node *BTreeNode, key []any, value any) error {
-	log.Printf("insertRecursive: nodeID=%s, isLeaf=%v, key=%#v", node.ID, node.IsLeaf(), key)
 	if node.IsLeaf() {
 		// Insert in sorted order
 		pos := 0
@@ -87,15 +82,12 @@ func (bt *BTree) insertRecursive(node *BTreeNode, key []any, value any) error {
 		for !bt.isUniqueKey && pos < len(node.Keys) && compareKeys(key, node.Keys[pos]) == 0 {
 			pos++
 		}
-		log.Printf("insertRecursive: inserting at pos=%d, key=%#v, value=%#v", pos, key, value)
 		node.Keys = append(node.Keys[:pos], append([][]any{key}, node.Keys[pos:]...)...)
 		node.Values = append(node.Values[:pos], append([]any{value}, node.Values[pos:]...)...)
 		node.IsDirty = true
-		log.Printf("insertRecursive: leaf node %s after insert, keys=%#v, values=%#v", node.ID, node.Keys, node.Values)
 		if !node.IsFull() {
 			return bt.storage.SaveNode(node)
 		}
-		log.Printf("insertRecursive: leaf node %s is full, splitting", node.ID)
 		return bt.splitLeaf(node)
 	}
 	// Internal node: find child
@@ -116,13 +108,11 @@ func (bt *BTree) insertRecursive(node *BTreeNode, key []any, value any) error {
 		// Child was split, handle promotion
 		return bt.handleSplit(node, child)
 	}
-	log.Printf("insertRecursive: internal node %s after insert, keys=%#v", node.ID, node.Keys)
 	return bt.storage.SaveNode(node)
 }
 
 // splitLeaf splits a full leaf node and promotes the middle key.
 func (bt *BTree) splitLeaf(leaf *BTreeNode) error {
-	log.Printf("splitLeaf: splitting leaf node %s, keys=%#v", leaf.ID, leaf.Keys)
 	mid := len(leaf.Keys) / 2
 	right := NewBTreeNode(generateNodeID(), LeafNode, bt.pageSize, leaf.indexPath)
 	right.Keys = append(right.Keys, leaf.Keys[mid:]...)
@@ -142,7 +132,6 @@ func (bt *BTree) splitLeaf(leaf *BTreeNode) error {
 	leaf.Values = leaf.Values[:mid]
 	leaf.Next = right.ID
 	leaf.IsDirty = true
-	log.Printf("splitLeaf: left node %s keys=%#v, right node %s keys=%#v", leaf.ID, leaf.Keys, right.ID, right.Keys)
 	// Set parent pointers for right node
 	right.Parent = leaf.Parent
 	if err := bt.storage.SaveNode(leaf); err != nil {
@@ -152,7 +141,6 @@ func (bt *BTree) splitLeaf(leaf *BTreeNode) error {
 		return err
 	}
 	if leaf.Parent == "" {
-		log.Printf("splitLeaf: creating new root for split leaves %s and %s", leaf.ID, right.ID)
 		// Create new root
 		root := NewBTreeNode(generateNodeID(), InternalNode, bt.pageSize, leaf.indexPath)
 		// Gather all leaves in order starting from the leftmost
@@ -178,13 +166,6 @@ func (bt *BTree) splitLeaf(leaf *BTreeNode) error {
 			current = next
 		}
 		// Set root keys and values
-		log.Printf("splitLeaf: new root children order: %v", func() []string {
-			ids := []string{}
-			for _, n := range leaves {
-				ids = append(ids, n.ID+":"+fmt.Sprint(n.Keys))
-			}
-			return ids
-		}())
 		root.Values = make([]any, 0, len(leaves))
 		root.Keys = make([][]any, 0, len(leaves)-1)
 		for i, n := range leaves {
@@ -206,7 +187,6 @@ func (bt *BTree) splitLeaf(leaf *BTreeNode) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("splitLeaf: promoted key=%#v to parent %s", right.Keys[0], leaf.Parent)
 	return bt.insertInternalAfterSplit(parent, right.Keys[0], right.ID)
 }
 
@@ -268,24 +248,19 @@ func (bt *BTree) handleSplit(parent, child *BTreeNode) error {
 
 // Search returns all values matching the given key (or all if key is nil).
 func (bt *BTree) Search(key []any) ([]any, error) {
-	log.Printf("Search: key=%#v", key)
 	if bt.rootID == "" {
-		log.Printf("Search: rootID is empty")
 		return nil, nil
 	}
 	node, err := bt.storage.LoadNode(bt.rootID)
 	if err != nil {
-		log.Printf("Search: failed to load root node %s: %v", bt.rootID, err)
 		return nil, err
 	}
 	// Descend to leftmost leaf if key == nil
 	if key == nil {
 		for !node.IsLeaf() {
-			log.Printf("Search: descending to child %s of internal node %s", node.Values[0], node.ID)
 			childID := node.Values[0].(string)
 			node, err = bt.storage.LoadNode(childID)
 			if err != nil {
-				log.Printf("Search: failed to load child node %s: %v", childID, err)
 				return nil, err
 			}
 		}
@@ -293,7 +268,6 @@ func (bt *BTree) Search(key []any) ([]any, error) {
 		results := []any{}
 		visited := map[string]bool{}
 		for node != nil && !visited[node.ID] {
-			log.Printf("Search: visiting leaf node %s, keys=%#v", node.ID, node.Keys)
 			visited[node.ID] = true
 			results = append(results, node.Values...)
 			if node.Next == "" {
@@ -301,12 +275,10 @@ func (bt *BTree) Search(key []any) ([]any, error) {
 			}
 			nextNode, err := bt.storage.LoadNode(node.Next)
 			if err != nil {
-				log.Printf("Search: failed to load next leaf node %s: %v", node.Next, err)
 				break
 			}
 			node = nextNode
 		}
-		log.Printf("Search: collected %d results", len(results))
 		return results, nil
 	}
 	// Original search for a specific key
@@ -320,10 +292,8 @@ func (bt *BTree) Search(key []any) ([]any, error) {
 			pos = len(node.Values) - 1
 		}
 		childID := node.Values[pos].(string)
-		log.Printf("Search: descending to child %s of internal node %s for key=%#v", childID, node.ID, key)
 		node, err = bt.storage.LoadNode(childID)
 		if err != nil {
-			log.Printf("Search: failed to load child node %s: %v", childID, err)
 			return nil, err
 		}
 	}
@@ -333,7 +303,6 @@ func (bt *BTree) Search(key []any) ([]any, error) {
 			results = append(results, node.Values[i])
 		}
 	}
-	log.Printf("Search: found %d results for key=%#v in leaf node %s", len(results), key, node.ID)
 	return results, nil
 }
 
@@ -370,7 +339,6 @@ func (bt *BTree) deleteRecursive(node *BTreeNode, key []any) (bool, bool, error)
 			found := false
 			for i := 0; i < len(node.Keys); i++ {
 				if compareKeys(key, node.Keys[i]) == 0 {
-					log.Printf("deleteRecursive: deleting key=%#v at pos=%d in leaf %s", key, i, node.ID)
 					node.Keys = append(node.Keys[:i], node.Keys[i+1:]...)
 					node.Values = append(node.Values[:i], node.Values[i+1:]...)
 					deleted = true
@@ -386,7 +354,6 @@ func (bt *BTree) deleteRecursive(node *BTreeNode, key []any) (bool, bool, error)
 			node.IsDirty = true
 			_ = bt.storage.SaveNode(node)
 		}
-		log.Printf("deleteRecursive: after delete, leaf %s keys=%#v, values=%#v", node.ID, node.Keys, node.Values)
 		return deleted, len(node.Keys) == 0, nil
 	}
 	// Internal node: find child
@@ -511,6 +478,17 @@ func compareKeys(a, b []any) int {
 					return -1
 				} else if va > vb {
 					return 1
+				}
+			}
+		case time.Time:
+			switch vb := bv.(type) {
+			case time.Time:
+				if va.Before(vb) {
+					return -1
+				} else if va.After(vb) {
+					return 1
+				} else {
+					return 0
 				}
 			}
 		default:
