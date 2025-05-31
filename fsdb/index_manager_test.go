@@ -1,6 +1,7 @@
 package fsdb
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,18 +41,39 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
+	results, err := im.Search(nil)
+	if err != nil {
+		t.Fatalf("Search all failed: %v", err)
+	}
+
+	if len(results) != 3 {
+		t.Errorf("Expected 3 rows after build, got %d", len(results))
+	}
+
 	// Insert a new row
 	if err := im.Insert([]any{4}, map[string]any{"id": 4, "name": "D"}); err != nil {
 		t.Fatalf("Insert failed: %v", err)
 	}
 
+	results, err = im.Search(nil)
+	if err != nil {
+		t.Fatalf("Search all failed: %v", err)
+	}
+
+	if len(results) != 4 {
+		t.Errorf("Expected 4 rows after insert, got %d", len(results))
+		t.Errorf("Results: %+v\n", results)
+		return
+	}
+
 	// Search for a specific key
-	results, err := im.Search([]any{2})
+	results, err = im.Search([]any{2})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
 	if len(results) != 1 || results[0].(map[string]any)["name"] != "B" {
 		t.Errorf("Search for id=2 returned wrong result: %+v", results)
+		return
 	}
 
 	// Search for a non-existent key
@@ -69,12 +91,39 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 		t.Errorf("Insert duplicate key failed: %v", err)
 	}
 
+	// Delete a row (should delete all records with key=2)
+	err = im.BTree.Delete([]any{2})
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	results, err = im.Search([]any{2})
+	if err != nil {
+		t.Fatalf("Search after delete failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected no results for id=2 after delete, got: %+v", results)
+	}
+
+	// Delete the duplicate as well (by key only)
+	err = im.BTree.Delete([]any{2})
+	if err != nil {
+		t.Fatalf("Delete duplicate by key failed: %v", err)
+	}
+	results, err = im.Search([]any{2})
+	if err != nil {
+		t.Fatalf("Search after delete duplicate failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected no results for id=2 after deleting all, got: %+v", results)
+	}
+
 	// Search for all rows (key=nil)
 	results, err = im.Search(nil)
 	if err != nil {
 		t.Fatalf("Search all failed: %v", err)
 	}
-	if len(results) < 4 {
-		t.Errorf("Expected at least 4 rows, got %d", len(results))
+	if len(results) < 3 {
+		fmt.Printf("Results: %+v\n", results)
+		t.Errorf("Expected 3 rows, got %d", len(results))
 	}
 }
