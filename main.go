@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
+	"github.com/dannyswat/fsdb"
 	"github.com/dannyswat/fsdb/datatype"
-	"github.com/dannyswat/fsdb/fsdb"
 )
 
 func main() {
