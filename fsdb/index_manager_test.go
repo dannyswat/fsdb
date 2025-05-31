@@ -88,7 +88,7 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 	}
 
 	// Delete a row (should delete all records with key=2)
-	err = im.BTree.Delete([]any{2})
+	err = im.Delete([]any{2})
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
