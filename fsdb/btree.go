@@ -188,6 +188,30 @@ func (bt *BTree) Search(key []any) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Descend to leftmost leaf if key == nil
+	if key == nil {
+		for !node.IsLeaf() {
+			childID := node.Values[0].(string)
+			node, err = bt.storage.LoadNode(childID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		// Traverse all leaves
+		results := []any{}
+		for node != nil {
+			results = append(results, node.Values...)
+			if node.Next == "" {
+				break
+			}
+			node, err = bt.storage.LoadNode(node.Next)
+			if err != nil {
+				return results, nil // Return what we have so far
+			}
+		}
+		return results, nil
+	}
+	// Original search for a specific key
 	for !node.IsLeaf() {
 		pos := 0
 		for pos < len(node.Keys) && (key == nil || compareKeys(key, node.Keys[pos]) > 0) {
@@ -199,10 +223,9 @@ func (bt *BTree) Search(key []any) ([]any, error) {
 			return nil, err
 		}
 	}
-	// At leaf
 	results := []any{}
 	for i, k := range node.Keys {
-		if key == nil || compareKeys(key, k) == 0 {
+		if compareKeys(key, k) == 0 {
 			results = append(results, node.Values[i])
 		}
 	}
@@ -217,20 +240,48 @@ func (bt *BTree) Delete(key []any, value any) error {
 // Utility: compareKeys compares two composite keys.
 func compareKeys(a, b []any) int {
 	for i := 0; i < len(a) && i < len(b); i++ {
-		switch va := a[i].(type) {
+		av := a[i]
+		bv := b[i]
+		switch va := av.(type) {
 		case int:
-			vb := b[i].(int)
-			if va < vb {
-				return -1
-			} else if va > vb {
-				return 1
+			switch vb := bv.(type) {
+			case int:
+				if va < vb {
+					return -1
+				} else if va > vb {
+					return 1
+				}
+			case float64:
+				// Accept float64 as int
+				if float64(va) < vb {
+					return -1
+				} else if float64(va) > vb {
+					return 1
+				}
+			}
+		case float64:
+			switch vb := bv.(type) {
+			case int:
+				if va < float64(vb) {
+					return -1
+				} else if va > float64(vb) {
+					return 1
+				}
+			case float64:
+				if va < vb {
+					return -1
+				} else if va > vb {
+					return 1
+				}
 			}
 		case string:
-			vb := b[i].(string)
-			if va < vb {
-				return -1
-			} else if va > vb {
-				return 1
+			vb, ok := bv.(string)
+			if ok {
+				if va < vb {
+					return -1
+				} else if va > vb {
+					return 1
+				}
 			}
 			// Add more types as needed
 		}
