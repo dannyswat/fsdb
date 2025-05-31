@@ -10,45 +10,78 @@ import (
 	"github.com/google/uuid"
 )
 
-// CollectionManager manages collections (schemas and their associated indexes).
+// Database manages collections (schemas and their associated indexes).
 // It handles creation, deletion, and modification of collection schemas.
-type CollectionManager struct {
-	mu       sync.RWMutex
-	basePath string // Base path where all collections are stored (e.g., /data/mydb)
-	// collections map[string]*Collection // Map of collection name to Collection object
+type Database struct {
+	mu          sync.RWMutex
+	basePath    string                 // Base path where all collections are stored (e.g., /data/mydb)
+	collections map[string]*Collection // Map of collection name to Collection object
 }
 
-// NewCollectionManager creates a new CollectionManager.
+func (db *Database) loadExistingCollections() error {
+	// Load existing collection schemas from disk
+	files, err := os.ReadDir(db.basePath)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			collectionPath := filepath.Join(db.basePath, file.Name())
+			schemaFilePath := filepath.Join(collectionPath, "schema.json")
+			data, err := os.ReadFile(schemaFilePath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue // Skip if schema file does not exist
+				}
+				return err
+			}
+
+			var schema CollectionSchema
+			if err := json.Unmarshal(data, &schema); err != nil {
+				return err
+			}
+
+			collection, err := NewCollection(collectionPath, schema)
+			if err != nil {
+				return err
+			}
+			db.collections[schema.Name] = collection
+		}
+	}
+	return nil
+}
+
+// NewDatabase creates a new CollectionManager.
 // basePath is the root directory where all database data will be stored.
-func NewCollectionManager(basePath string) (*CollectionManager, error) {
+func NewDatabase(basePath string) (*Database, error) {
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, err
 	}
-	cm := &CollectionManager{
-		basePath: basePath,
-		// collections: make(map[string]*Collection),
+	db := &Database{
+		basePath:    basePath,
+		collections: make(map[string]*Collection),
 	}
+
 	// TODO: Load existing collection schemas from disk
-	return cm, nil
+	if err := db.loadExistingCollections(); err != nil {
+		return nil, err
+	}
+	return db, nil
 }
 
 // CreateCollection creates a new collection with the given schema.
 // It initializes the directory structure for the collection and its indexes.
-func (cm *CollectionManager) CreateCollection(schema CollectionSchema) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+func (db *Database) CreateCollection(schema CollectionSchema) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	collectionPath := filepath.Join(cm.basePath, schema.Name)
+	collectionPath := filepath.Join(db.basePath, schema.Name)
 	if _, err := os.Stat(collectionPath); !os.IsNotExist(err) {
 		return os.ErrExist // Collection already exists
 	}
 
 	if err := os.MkdirAll(collectionPath, 0755); err != nil {
-		return err
-	}
-
-	// Create a subdirectory for indexes
-	if err := os.MkdirAll(filepath.Join(collectionPath, "indexes"), 0755); err != nil {
 		return err
 	}
 
@@ -78,16 +111,21 @@ func (cm *CollectionManager) CreateCollection(schema CollectionSchema) error {
 	// TODO: Initialize IndexManager for the clustered index
 	// TODO: Initialize IndexManagers for any non-clustered indexes defined in the schema
 
-	// cm.collections[schema.Name] = NewCollection(collectionPath, schema)
+	collection, err := NewCollection(collectionPath, schema)
+	if err != nil {
+		return err
+	}
+	db.collections[schema.Name] = collection
+
 	return nil
 }
 
 // GetCollectionSchema retrieves the schema for a given collection name.
-func (cm *CollectionManager) GetCollectionSchema(collectionName string) (*CollectionSchema, error) {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+func (db *Database) GetCollectionSchema(collectionName string) (*CollectionSchema, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
-	collectionPath := filepath.Join(cm.basePath, collectionName)
+	collectionPath := filepath.Join(db.basePath, collectionName)
 	schemaFilePath := filepath.Join(collectionPath, "schema.json")
 
 	data, err := os.ReadFile(schemaFilePath)
@@ -108,11 +146,11 @@ func (cm *CollectionManager) GetCollectionSchema(collectionName string) (*Collec
 // UpdateCollectionSchema updates the schema of an existing collection.
 // This can be a complex operation, potentially requiring data migration or re-indexing.
 // For now, we'll keep it simple and assume only additive changes or metadata updates.
-func (cm *CollectionManager) UpdateCollectionSchema(collectionName string, updatedSchema CollectionSchema) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+func (db *Database) UpdateCollectionSchema(collectionName string, updatedSchema CollectionSchema) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	currentSchema, err := cm.GetCollectionSchema(collectionName)
+	currentSchema, err := db.GetCollectionSchema(collectionName)
 	if err != nil {
 		return err
 	}
@@ -129,7 +167,7 @@ func (cm *CollectionManager) UpdateCollectionSchema(collectionName string, updat
 
 	updatedSchema.UpdatedAt = time.Now()
 
-	collectionPath := filepath.Join(cm.basePath, collectionName)
+	collectionPath := filepath.Join(db.basePath, collectionName)
 	schemaFilePath := filepath.Join(collectionPath, "schema.json")
 	data, err := json.MarshalIndent(updatedSchema, "", "  ")
 	if err != nil {
@@ -140,25 +178,25 @@ func (cm *CollectionManager) UpdateCollectionSchema(collectionName string, updat
 }
 
 // DeleteCollection removes a collection and all its data.
-func (cm *CollectionManager) DeleteCollection(collectionName string) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+func (db *Database) DeleteCollection(collectionName string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	collectionPath := filepath.Join(cm.basePath, collectionName)
+	collectionPath := filepath.Join(db.basePath, collectionName)
 	if _, err := os.Stat(collectionPath); os.IsNotExist(err) {
 		return os.ErrNotExist // Collection does not exist
 	}
 
-	// delete(cm.collections, collectionName)
+	// delete(db.collections, collectionName)
 	return os.RemoveAll(collectionPath)
 }
 
 // GetCollection loads a collection and its indexes by name.
-func (cm *CollectionManager) GetCollection(collectionName string) (*Collection, error) {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	collectionPath := filepath.Join(cm.basePath, collectionName)
-	schema, err := cm.GetCollectionSchema(collectionName)
+func (db *Database) GetCollection(collectionName string) (*Collection, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	collectionPath := filepath.Join(db.basePath, collectionName)
+	schema, err := db.GetCollectionSchema(collectionName)
 	if err != nil {
 		return nil, err
 	}

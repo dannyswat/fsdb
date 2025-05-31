@@ -73,13 +73,15 @@ func (im *IndexManager) Build(data []map[string]any) error {
 	// Sort data by index keys if needed (not implemented here)
 	for _, row := range data {
 		var key []any
+		var value any
 		if im.indexDef.IsClustered {
 			key = extractIndexKey(row, im.indexDef)
+			value = row
 		} else {
 			key = extractIndexKey(row, im.indexDef)
-			// value could be a pointer to clustered index key
+			value = extractNonClusteredValue(row, im.indexDef)
 		}
-		if err := im.BTree.Insert(key, row); err != nil {
+		if err := im.BTree.Insert(key, value); err != nil {
 			return err
 		}
 	}
@@ -97,7 +99,15 @@ func (im *IndexManager) Insert(key []any, value any) error {
 	if im.BTree == nil {
 		return errors.New("BTree not initialized")
 	}
-	return im.BTree.Insert(key, value)
+	if im.indexDef.IsClustered {
+		return im.BTree.Insert(key, value)
+	}
+	// For non-clustered, extract only the primary key and included fields
+	row, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("value must be a map for non-clustered index")
+	}
+	return im.BTree.Insert(key, extractNonClusteredValue(row, im.indexDef))
 }
 
 // Update updates an existing entry in the index.
@@ -109,18 +119,30 @@ func (im *IndexManager) Update(oldKey []any, oldValue any, newKey []any, newValu
 	if im.BTree == nil {
 		return errors.New("BTree not initialized")
 	}
-	if !im.indexDef.IsClustered {
-		return errors.New("Update is only supported for clustered (unique key) indexes")
+	if im.indexDef.IsClustered {
+		// If key changed, treat as delete+insert
+		if compareKeys(oldKey, newKey) != 0 {
+			if err := im.BTree.Delete(oldKey); err != nil {
+				return err
+			}
+			return im.BTree.Insert(newKey, newValue)
+		}
+		// Key unchanged: update value in-place
+		return im.BTree.Update(oldKey, newValue)
 	}
-	// If key changed, treat as delete+insert
+	// For non-clustered, extract only the primary key and included fields
+	_, ok1 := oldValue.(map[string]any)
+	newRow, ok2 := newValue.(map[string]any)
+	if !ok1 || !ok2 {
+		return errors.New("values must be maps for non-clustered index")
+	}
 	if compareKeys(oldKey, newKey) != 0 {
 		if err := im.BTree.Delete(oldKey); err != nil {
 			return err
 		}
-		return im.BTree.Insert(newKey, newValue)
+		return im.BTree.Insert(newKey, extractNonClusteredValue(newRow, im.indexDef))
 	}
-	// Key unchanged: update value in-place
-	return im.BTree.Update(oldKey, newValue)
+	return im.BTree.Update(oldKey, extractNonClusteredValue(newRow, im.indexDef))
 }
 
 // Delete removes an entry from the index.
@@ -151,4 +173,22 @@ func extractIndexKey(row map[string]any, def IndexDefinition) []any {
 		key[i] = row[k.Name]
 	}
 	return key
+}
+
+// Helper to extract only the primary key and included fields for non-clustered index
+func extractNonClusteredValue(row map[string]any, def IndexDefinition) map[string]any {
+	result := make(map[string]any)
+	// Always include the index key fields (as primary key reference)
+	for _, k := range def.Keys {
+		if v, ok := row[k.Name]; ok {
+			result[k.Name] = v
+		}
+	}
+	// Include additional fields specified in Includes
+	for _, k := range def.Includes {
+		if v, ok := row[k]; ok {
+			result[k] = v
+		}
+	}
+	return result
 }
