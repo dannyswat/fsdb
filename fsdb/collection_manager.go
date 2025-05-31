@@ -184,18 +184,104 @@ func validateSchema(schema *CollectionSchema) error {
 	return nil
 }
 
-// TODO: Consider adding a Collection struct that holds IndexManagers for a loaded collection.
-/*
+// Collection represents a loaded collection with its indexes.
 type Collection struct {
-	mu             sync.RWMutex
-	schema         CollectionSchema
-	collectionPath string
-	clusteredIndex *IndexManager
+	mu                  sync.RWMutex
+	schema              CollectionSchema
+	collectionPath      string
+	clusteredIndex      *IndexManager
 	nonClusteredIndexes map[string]*IndexManager
-	// dataFile *os.File // If using a single file for heap storage when no clustered index
 }
 
-func NewCollection(collectionPath string, schema CollectionSchema) *Collection {
-    // ... load/initialize index managers ...
+// NewCollection loads a collection and initializes its indexes.
+func NewCollection(collectionPath string, schema CollectionSchema) (*Collection, error) {
+	coll := &Collection{
+		schema:              schema,
+		collectionPath:      collectionPath,
+		nonClusteredIndexes: make(map[string]*IndexManager),
+	}
+	for _, idx := range schema.Indexes {
+		im, err := NewIndexManager(filepath.Join(collectionPath, idx.Name), idx)
+		if err != nil {
+			return nil, err
+		}
+		if idx.IsClustered {
+			coll.clusteredIndex = im
+		} else {
+			coll.nonClusteredIndexes[idx.Name] = im
+		}
+	}
+	return coll, nil
 }
-*/
+
+// Insert inserts a row into the collection (and all indexes).
+func (c *Collection) Insert(row map[string]any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.clusteredIndex == nil {
+		return os.ErrInvalid // No clustered index defined
+	}
+	key := extractIndexKey(row, c.clusteredIndex.indexDef)
+	if err := c.clusteredIndex.Insert(key, row); err != nil {
+		return err
+	}
+	for _, im := range c.nonClusteredIndexes {
+		idxKey := extractIndexKey(row, im.indexDef)
+		if err := im.Insert(idxKey, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Update updates a row in the collection (and all indexes).
+func (c *Collection) Update(oldRow, newRow map[string]any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.clusteredIndex == nil {
+		return os.ErrInvalid
+	}
+	oldKey := extractIndexKey(oldRow, c.clusteredIndex.indexDef)
+	newKey := extractIndexKey(newRow, c.clusteredIndex.indexDef)
+	if err := c.clusteredIndex.Update(oldKey, oldRow, newKey, newRow); err != nil {
+		return err
+	}
+	for _, im := range c.nonClusteredIndexes {
+		oldIdxKey := extractIndexKey(oldRow, im.indexDef)
+		newIdxKey := extractIndexKey(newRow, im.indexDef)
+		if err := im.Update(oldIdxKey, oldRow, newIdxKey, newRow); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Delete deletes a row from the collection (and all indexes).
+func (c *Collection) Delete(row map[string]any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.clusteredIndex == nil {
+		return os.ErrInvalid
+	}
+	key := extractIndexKey(row, c.clusteredIndex.indexDef)
+	if err := c.clusteredIndex.Delete(key); err != nil {
+		return err
+	}
+	for _, im := range c.nonClusteredIndexes {
+		idxKey := extractIndexKey(row, im.indexDef)
+		if err := im.Delete(idxKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Search finds rows in the collection by key (clustered index).
+func (c *Collection) Find(key []any) ([]any, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.clusteredIndex == nil {
+		return nil, os.ErrInvalid
+	}
+	return c.clusteredIndex.Search(key)
+}

@@ -12,13 +12,6 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 	_ = os.RemoveAll(tmpDir)
 	defer os.RemoveAll(tmpDir)
 
-	schema := CollectionSchema{
-		Name: "testcoll",
-		Columns: []ColumnDefinition{
-			{FieldName: "id"},
-			{FieldName: "name"},
-		},
-	}
 	indexDef := IndexDefinition{
 		Name:        "primary",
 		IsClustered: true,
@@ -26,7 +19,7 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 		Keys:        []IndexField{{Name: "id"}},
 	}
 
-	im, err := NewIndexManager(tmpDir, indexDef, schema)
+	im, err := NewIndexManager(tmpDir, indexDef)
 	if err != nil {
 		t.Fatalf("failed to create IndexManager: %v", err)
 	}
@@ -107,8 +100,21 @@ func TestIndexManager_BuildInsertSearch(t *testing.T) {
 		t.Errorf("Expected no results for id=2 after delete, got: %+v", results)
 	}
 
+	err = im.Update([]any{1}, map[string]any{"id": 1, "name": "A"}, []any{1}, map[string]any{"id": 1, "name": "A2"})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	// Search for updated row
+	results, err = im.Search([]any{1})
+	if err != nil {
+		t.Fatalf("Search after update failed: %v", err)
+	}
+	if len(results) != 1 || results[0].(map[string]any)["name"] != "A2" {
+		t.Errorf("Expected updated row for id=1, got: %+v", results)
+		return
+	}
 	// Delete the duplicate as well (by key only)
-	err = im.BTree.Delete([]any{2})
+	err = im.Delete([]any{2})
 	if err != nil {
 		t.Fatalf("Delete duplicate by key failed: %v", err)
 	}

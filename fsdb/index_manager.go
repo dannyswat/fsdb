@@ -12,10 +12,9 @@ import (
 type IndexManager struct {
 	mu         sync.RWMutex
 	indexDef   IndexDefinition
-	schema     CollectionSchema // Schema of the collection this index belongs to
-	basePath   string           // Base path for the collection's data
-	indexPath  string           // Path to this specific index's data (e.g., /basePath/indexes/indexName)
-	rootNodeID string           // ID of the root node of the B+ tree
+	basePath   string // Base path for the collection's data
+	indexPath  string // Path to this specific index's data (e.g., /basePath/indexes/indexName)
+	rootNodeID string // ID of the root node of the B+ tree
 	BTree      *BTree
 	Storage    BTreeNodeStorage
 	// nodeCache    map[string]*BTreeNode // TODO: Implement node caching
@@ -26,16 +25,14 @@ type IndexManager struct {
 // basePath is the root directory for the collection.
 // indexDef is the definition of the index to manage.
 // schema is the schema of the collection.
-func NewIndexManager(basePath string, indexDef IndexDefinition, schema CollectionSchema) (*IndexManager, error) {
+func NewIndexManager(basePath string, indexDef IndexDefinition) (*IndexManager, error) {
 	indexPath := filepath.Join(basePath, "indexes", indexDef.Name)
-	if err := os.MkdirAll(indexPath, 0755); err != nil {
+	storage := &FileBTreeNodeStorage{IndexPath: indexPath}
+	if err := storage.Init(); err != nil {
 		return nil, err
 	}
-
-	storage := &FileBTreeNodeStorage{IndexPath: indexPath}
 	im := &IndexManager{
 		indexDef:  indexDef,
-		schema:    schema,
 		basePath:  basePath,
 		indexPath: indexPath,
 		Storage:   storage,
@@ -104,24 +101,37 @@ func (im *IndexManager) Insert(key []any, value any) error {
 }
 
 // Update updates an existing entry in the index.
-// This might involve deleting the old entry and inserting the new one,
-// especially if the indexed key values change.
+// For clustered index: updates the value for the key in-place.
+// For non-clustered index: returns an error (not supported).
 func (im *IndexManager) Update(oldKey []any, oldValue any, newKey []any, newValue any) error {
 	im.mu.Lock()
 	defer im.mu.Unlock()
-	// TODO: Implement B+ tree update logic
-	// Consider if keys changed. If so, it's a delete and insert.
-	// If only non-key values changed (for clustered index) or pointed value changed (for non-clustered),
-	// it might be an in-place update if possible or a simpler update.
-	return nil // Placeholder
+	if im.BTree == nil {
+		return errors.New("BTree not initialized")
+	}
+	if !im.indexDef.IsClustered {
+		return errors.New("Update is only supported for clustered (unique key) indexes")
+	}
+	// If key changed, treat as delete+insert
+	if compareKeys(oldKey, newKey) != 0 {
+		if err := im.BTree.Delete(oldKey); err != nil {
+			return err
+		}
+		return im.BTree.Insert(newKey, newValue)
+	}
+	// Key unchanged: update value in-place
+	return im.BTree.Update(oldKey, newValue)
 }
 
 // Delete removes an entry from the index.
-func (im *IndexManager) Delete(key []any, value any) error {
+// For both clustered and non-clustered indexes: deletes all entries with the given key.
+func (im *IndexManager) Delete(key []any) error {
 	im.mu.Lock()
 	defer im.mu.Unlock()
-	// TODO: Implement B+ tree deletion logic
-	return nil // Placeholder
+	if im.BTree == nil {
+		return errors.New("BTree not initialized")
+	}
+	return im.BTree.Delete(key)
 }
 
 // Search finds entries in the index based on a key or a range of keys.
@@ -142,5 +152,3 @@ func extractIndexKey(row map[string]any, def IndexDefinition) []any {
 	}
 	return key
 }
-
-// TODO: Add methods for loading/saving nodes, managing metadata, etc.

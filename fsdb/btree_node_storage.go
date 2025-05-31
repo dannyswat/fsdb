@@ -17,6 +17,11 @@ type FileBTreeNodeStorage struct {
 	IndexPath string
 }
 
+// Init ensures the index directory exists.
+func (s *FileBTreeNodeStorage) Init() error {
+	return os.MkdirAll(s.IndexPath, 0755)
+}
+
 func (fs *FileBTreeNodeStorage) SaveNode(node *BTreeNode) error {
 	if !node.IsDirty {
 		return nil

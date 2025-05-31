@@ -34,12 +34,15 @@ func (bt *BTree) RootID() string {
 func (bt *BTree) Insert(key []any, value any) error {
 	log.Printf("Insert: key=%#v, value=%#v", key, value)
 	if bt.isUniqueKey {
-		results, err := bt.Search(key)
-		if err != nil {
-			return err
-		}
-		if len(results) > 0 {
-			return fmt.Errorf("duplicate key not allowed in clustered index: %#v", key)
+		// Only check for duplicates if the tree is not empty
+		if bt.rootID != "" {
+			results, err := bt.Search(key)
+			if err != nil {
+				return err
+			}
+			if len(results) > 0 {
+				return fmt.Errorf("duplicate key not allowed in clustered index: %#v", key)
+			}
 		}
 	}
 	if bt.rootID == "" {
@@ -428,6 +431,41 @@ func (bt *BTree) deleteRecursive(node *BTreeNode, key []any) (bool, bool, error)
 	}
 	_ = bt.storage.SaveNode(node)
 	return true, false, nil
+}
+
+// Update replaces the value for a given key in a clustered index. Returns error if not unique key index.
+func (bt *BTree) Update(key []any, newValue any) error {
+	if !bt.isUniqueKey {
+		return fmt.Errorf("Update is only supported for clustered (unique key) indexes")
+	}
+	if bt.rootID == "" {
+		return fmt.Errorf("tree is empty")
+	}
+	node, err := bt.storage.LoadNode(bt.rootID)
+	if err != nil {
+		return err
+	}
+	// Descend to the leaf node containing the key
+	for !node.IsLeaf() {
+		pos := 0
+		for pos < len(node.Keys) && compareKeys(key, node.Keys[pos]) > 0 {
+			pos++
+		}
+		childID := node.Values[pos].(string)
+		node, err = bt.storage.LoadNode(childID)
+		if err != nil {
+			return err
+		}
+	}
+	// Find and update the value for the key
+	for i, k := range node.Keys {
+		if compareKeys(key, k) == 0 {
+			node.Values[i] = newValue
+			node.IsDirty = true
+			return bt.storage.SaveNode(node)
+		}
+	}
+	return fmt.Errorf("key not found: %#v", key)
 }
 
 // Utility: compareKeys compares two composite keys.
