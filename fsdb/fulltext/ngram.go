@@ -107,15 +107,5 @@ func NGram(input string, n int) []string {
 		}
 	}
 
-	// Remove duplicates
-	seen := make(map[string]bool)
-	var unique []string
-	for _, ngram := range allNgrams {
-		if !seen[ngram] {
-			seen[ngram] = true
-			unique = append(unique, ngram)
-		}
-	}
-
-	return unique
+	return allNgrams
 }
