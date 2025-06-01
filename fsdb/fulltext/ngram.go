@@ -26,7 +26,7 @@ func isChineseChar(r rune) bool {
 // extractWords extracts words from input, separating English and Unicode text
 func extractWords(input string) []string {
 	runes := []rune(strings.ToLower(input))
-	var words []string
+	var words []string = make([]string, 0)
 	var currentWord []rune
 	var isCurrentWordEnglish bool
 
@@ -91,8 +91,20 @@ func NGram(input string, n int) []string {
 	for _, word := range words {
 		runes := []rune(word)
 
-		// For English words, treat the whole word as a unit if it's shorter than n
-		// For Chinese text, always use character-level n-grams
+		// For Chinese text, always use bigrams (n=2)
+		if isChineseChar(runes[0]) {
+			if len(runes) >= 2 {
+				for i := 0; i <= len(runes)-2; i++ {
+					allNgrams = append(allNgrams, string(runes[i:i+2]))
+				}
+			} else {
+				// Single Chinese character
+				allNgrams = append(allNgrams, word)
+			}
+			continue
+		}
+
+		// For English words, treat the whole word as a unit if shorter than n
 		if isEnglishChar(runes[0]) && len(runes) <= n {
 			allNgrams = append(allNgrams, word)
 			continue
@@ -101,8 +113,7 @@ func NGram(input string, n int) []string {
 		// Generate n-grams for this word
 		if len(runes) >= n {
 			for i := 0; i <= len(runes)-n; i++ {
-				ngram := string(runes[i : i+n])
-				allNgrams = append(allNgrams, ngram)
+				allNgrams = append(allNgrams, string(runes[i:i+n]))
 			}
 		}
 	}

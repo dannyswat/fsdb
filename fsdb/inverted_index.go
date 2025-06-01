@@ -1,4 +1,4 @@
-package fulltext
+package fsdb
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dannyswat/fsdb"
+	"github.com/dannyswat/fsdb/fulltext"
 )
 
 type DocumentID string
@@ -29,12 +29,12 @@ type InvertedIndex struct {
 	mu           sync.RWMutex
 	indexPath    string
 	ngramSize    int
-	fileProvider fsdb.IFileProvider
+	fileProvider IFileProvider
 	cache        map[string]*PostingList // In-memory cache for frequently accessed terms
 }
 
 // NewInvertedIndex creates a new file-based inverted index
-func NewInvertedIndex(indexPath string, ngramSize int, fileProvider fsdb.IFileProvider) (*InvertedIndex, error) {
+func NewInvertedIndex(indexPath string, ngramSize int, fileProvider IFileProvider) (*InvertedIndex, error) {
 	if ngramSize <= 0 {
 		ngramSize = 3 // Default to trigrams
 	}
@@ -65,7 +65,7 @@ func (idx *InvertedIndex) AddDocument(docID DocumentID, text string) error {
 	}
 
 	// Generate n-grams from the text
-	ngrams := NGram(strings.ToLower(text), idx.ngramSize)
+	ngrams := fulltext.NGram(strings.ToLower(text), idx.ngramSize)
 
 	// Count term frequencies
 	termFreq := make(map[string]int)
@@ -100,7 +100,7 @@ func (idx *InvertedIndex) Search(query string) ([]DocumentID, error) {
 	}
 
 	// Generate n-grams from the query
-	ngrams := NGram(strings.ToLower(query), idx.ngramSize)
+	ngrams := fulltext.NGram(strings.ToLower(query), idx.ngramSize)
 	if len(ngrams) == 0 {
 		return nil, nil
 	}

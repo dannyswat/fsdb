@@ -1,9 +1,11 @@
-package fulltext
+package fsdb_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dannyswat/fsdb"
 )
 
 // MockFileProvider for testing
@@ -91,7 +93,7 @@ func (m *MockFileProvider) ReadDirectory(path string) ([]os.DirEntry, error) {
 
 func TestInvertedIndex_AddAndSearch(t *testing.T) {
 	mockProvider := NewMockFileProvider()
-	idx, err := NewInvertedIndex("/test/index", 3, mockProvider)
+	idx, err := fsdb.NewInvertedIndex("/test/index", 3, mockProvider)
 	if err != nil {
 		t.Fatalf("Failed to create inverted index: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestInvertedIndex_AddAndSearch(t *testing.T) {
 
 func TestInvertedIndex_ChineseText(t *testing.T) {
 	mockProvider := NewMockFileProvider()
-	idx, err := NewInvertedIndex("/test/index", 2, mockProvider) // Use bigrams for Chinese
+	idx, err := fsdb.NewInvertedIndex("/test/index", 2, mockProvider) // Use bigrams for Chinese
 	if err != nil {
 		t.Fatalf("Failed to create inverted index: %v", err)
 	}
@@ -178,7 +180,7 @@ func TestInvertedIndex_ChineseText(t *testing.T) {
 
 func TestInvertedIndex_RemoveDocument(t *testing.T) {
 	mockProvider := NewMockFileProvider()
-	idx, err := NewInvertedIndex("/test/index", 3, mockProvider)
+	idx, err := fsdb.NewInvertedIndex("/test/index", 3, mockProvider)
 	if err != nil {
 		t.Fatalf("Failed to create inverted index: %v", err)
 	}

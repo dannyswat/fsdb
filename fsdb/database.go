@@ -3,7 +3,9 @@ package fsdb
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -228,16 +230,17 @@ func validateSchema(schema *CollectionSchema) error {
 // Collection represents a loaded collection with its indexes.
 type Collection struct {
 	mu                  sync.RWMutex
-	schema              CollectionSchema
+	Schema              CollectionSchema
 	collectionPath      string
 	clusteredIndex      *IndexManager
 	nonClusteredIndexes map[string]*IndexManager
+	fullTextIndex       *InvertedIndex // Optional full-text index for the collection
 }
 
 // NewCollection loads a collection and initializes its indexes.
 func NewCollection(collectionPath string, schema CollectionSchema) (*Collection, error) {
 	coll := &Collection{
-		schema:              schema,
+		Schema:              schema,
 		collectionPath:      collectionPath,
 		nonClusteredIndexes: make(map[string]*IndexManager),
 	}
@@ -251,6 +254,13 @@ func NewCollection(collectionPath string, schema CollectionSchema) (*Collection,
 		} else {
 			coll.nonClusteredIndexes[idx.Name] = im
 		}
+	}
+	if schema.EnableFullText {
+		ftIndex, err := NewInvertedIndex(filepath.Join(collectionPath, "fulltext"), 3, &FileProvider{})
+		if err != nil {
+			return nil, err
+		}
+		coll.fullTextIndex = ftIndex
 	}
 	return coll, nil
 }
@@ -272,6 +282,18 @@ func (c *Collection) Insert(row map[string]any) error {
 			return err
 		}
 	}
+
+	// Update full-text index if enabled
+	if c.fullTextIndex != nil {
+		docID := c.generateDocumentID(key)
+		fullTextContent := c.extractFullTextContent(row)
+		if fullTextContent != "" {
+			if err := c.fullTextIndex.AddDocument(DocumentID(docID), fullTextContent); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -294,6 +316,26 @@ func (c *Collection) Update(oldRow, newRow map[string]any) error {
 			return err
 		}
 	}
+
+	// Update full-text index if enabled
+	if c.fullTextIndex != nil {
+		oldDocID := c.generateDocumentID(oldKey)
+		newDocID := c.generateDocumentID(newKey)
+
+		// Remove old document
+		if err := c.fullTextIndex.RemoveDocument(DocumentID(oldDocID)); err != nil {
+			return err
+		}
+
+		// Add new document
+		newFullTextContent := c.extractFullTextContent(newRow)
+		if newFullTextContent != "" {
+			if err := c.fullTextIndex.AddDocument(DocumentID(newDocID), newFullTextContent); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -314,6 +356,15 @@ func (c *Collection) Delete(row map[string]any) error {
 			return err
 		}
 	}
+
+	// Remove from full-text index if enabled
+	if c.fullTextIndex != nil {
+		docID := c.generateDocumentID(key)
+		if err := c.fullTextIndex.RemoveDocument(DocumentID(docID)); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -325,4 +376,39 @@ func (c *Collection) Find(key []any) ([]any, error) {
 		return nil, errInvalidCollection
 	}
 	return c.clusteredIndex.Search(key)
+}
+
+func (c *Collection) SearchFullText(query string) ([]DocumentID, error) {
+	if c.fullTextIndex == nil {
+		return nil, errInvalidCollection
+	}
+	return c.fullTextIndex.Search(query)
+}
+
+// generateDocumentID creates a unique document ID from the primary key
+func (c *Collection) generateDocumentID(key []any) string {
+	// Convert key to string representation
+	var keyStr strings.Builder
+	for i, val := range key {
+		if i > 0 {
+			keyStr.WriteString("_")
+		}
+		keyStr.WriteString(fmt.Sprintf("%v", val))
+	}
+	return keyStr.String()
+}
+
+// extractFullTextContent extracts text from columns marked for full-text indexing
+func (c *Collection) extractFullTextContent(row map[string]any) string {
+	var textParts []string
+
+	for _, column := range c.Schema.Columns {
+		if column.FullText {
+			if value, exists := row[column.FieldName]; exists && value != nil {
+				textParts = append(textParts, fmt.Sprintf("%v", value))
+			}
+		}
+	}
+
+	return strings.Join(textParts, " ")
 }
