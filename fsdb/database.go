@@ -79,6 +79,15 @@ func NewDatabase(basePath string) (*Database, error) {
 	return db, nil
 }
 
+func (db *Database) EnsureCreatedCollection(schema CollectionSchema) error {
+	err := db.CreateCollection(schema)
+	if err != nil && !errors.Is(err, errCollectionExists) {
+		return fmt.Errorf("failed to create collection %s: %w", schema.Name, err)
+	}
+
+	return nil
+}
+
 // CreateCollection creates a new collection with the given schema.
 // It initializes the directory structure for the collection and its indexes.
 func (db *Database) CreateCollection(schema CollectionSchema) error {
@@ -376,6 +385,16 @@ func (c *Collection) Find(key []any) ([]any, error) {
 		return nil, errInvalidCollection
 	}
 	return c.clusteredIndex.Search(key)
+}
+
+func (c *Collection) FindByIndex(indexName string, key []any) ([]any, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	im, exists := c.nonClusteredIndexes[indexName]
+	if !exists {
+		return nil, fmt.Errorf("index %s does not exist", indexName)
+	}
+	return im.Search(key)
 }
 
 func (c *Collection) SearchFullText(query string) ([]DocumentID, error) {

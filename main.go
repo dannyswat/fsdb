@@ -12,7 +12,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = db.CreateCollection(fsdb.CollectionSchema{
+	err = db.EnsureCreatedCollection(fsdb.CollectionSchema{
 		Name: "users",
 		Columns: []fsdb.ColumnDefinition{
 			{FieldName: "id", DataType: datatype.Integer},

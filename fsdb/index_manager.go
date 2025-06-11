@@ -12,7 +12,6 @@ import (
 type IndexManager struct {
 	mu         sync.RWMutex
 	indexDef   IndexDefinition
-	basePath   string // Base path for the collection's data
 	indexPath  string // Path to this specific index's data (e.g., /basePath/indexes/indexName)
 	rootNodeID string // ID of the root node of the B+ tree
 	bTree      *BTree
@@ -25,20 +24,41 @@ type IndexManager struct {
 // basePath is the root directory for the collection.
 // indexDef is the definition of the index to manage.
 // schema is the schema of the collection.
-func NewIndexManager(basePath string, indexDef IndexDefinition) (*IndexManager, error) {
-	indexPath := filepath.Join(basePath, indexDef.Name)
+func NewIndexManager(indexPath string, indexDef IndexDefinition) (*IndexManager, error) {
 	storage := &FileBTreeNodeStorage{IndexPath: indexPath}
 	if err := storage.Init(); err != nil {
 		return nil, err
 	}
 	im := &IndexManager{
 		indexDef:  indexDef,
-		basePath:  basePath,
 		indexPath: indexPath,
 		Storage:   storage,
 	}
-	im.bTree = NewBTree(storage, "", indexDef.PageSize, indexDef.IsClustered)
+	// Load root node ID from meta file if exists
+	rootID, err := loadRootNodeID(indexPath)
+	if err == nil && rootID != "" {
+		im.rootNodeID = rootID
+		im.bTree = NewBTree(storage, rootID, indexDef.PageSize, indexDef.IsClustered)
+	} else {
+		im.bTree = NewBTree(storage, "", indexDef.PageSize, indexDef.IsClustered)
+	}
 	return im, nil
+}
+
+// Helper to persist root node ID to a file
+func saveRootNodeID(indexPath, rootID string) error {
+	metaPath := filepath.Join(indexPath, "root.meta")
+	return os.WriteFile(metaPath, []byte(rootID), 0644)
+}
+
+// Helper to load root node ID from a file
+func loadRootNodeID(indexPath string) (string, error) {
+	metaPath := filepath.Join(indexPath, "root.meta")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // GetName returns the name of the index.
@@ -86,6 +106,9 @@ func (im *IndexManager) Build(data []map[string]any) error {
 		}
 	}
 	im.rootNodeID = im.bTree.RootID()
+	if err := saveRootNodeID(im.indexPath, im.rootNodeID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -99,15 +122,21 @@ func (im *IndexManager) Insert(key []any, value any) error {
 	if im.bTree == nil {
 		return errors.New("BTree not initialized")
 	}
+	var err error
 	if im.indexDef.IsClustered {
-		return im.bTree.Insert(key, value)
+		err = im.bTree.Insert(key, value)
+	} else {
+		row, ok := value.(map[string]any)
+		if !ok {
+			return errors.New("value must be a map for non-clustered index")
+		}
+		err = im.bTree.Insert(key, extractNonClusteredValue(row, im.indexDef))
 	}
-	// For non-clustered, extract only the primary key and included fields
-	row, ok := value.(map[string]any)
-	if !ok {
-		return errors.New("value must be a map for non-clustered index")
+	if err == nil {
+		im.rootNodeID = im.bTree.RootID()
+		saveRootNodeID(im.indexPath, im.rootNodeID)
 	}
-	return im.bTree.Insert(key, extractNonClusteredValue(row, im.indexDef))
+	return err
 }
 
 // Update updates an existing entry in the index.
@@ -119,30 +148,34 @@ func (im *IndexManager) Update(oldKey []any, oldValue any, newKey []any, newValu
 	if im.bTree == nil {
 		return errors.New("BTree not initialized")
 	}
+	var err error
 	if im.indexDef.IsClustered {
-		// If key changed, treat as delete+insert
 		if compareKeys(oldKey, newKey) != 0 {
-			if err := im.bTree.Delete(oldKey); err != nil {
-				return err
+			if err = im.bTree.Delete(oldKey); err == nil {
+				err = im.bTree.Insert(newKey, newValue)
 			}
-			return im.bTree.Insert(newKey, newValue)
+		} else {
+			err = im.bTree.Update(oldKey, newValue)
 		}
-		// Key unchanged: update value in-place
-		return im.bTree.Update(oldKey, newValue)
-	}
-	// For non-clustered, extract only the primary key and included fields
-	_, ok1 := oldValue.(map[string]any)
-	newRow, ok2 := newValue.(map[string]any)
-	if !ok1 || !ok2 {
-		return errors.New("values must be maps for non-clustered index")
-	}
-	if compareKeys(oldKey, newKey) != 0 {
-		if err := im.bTree.Delete(oldKey); err != nil {
-			return err
+	} else {
+		_, ok1 := oldValue.(map[string]any)
+		newRow, ok2 := newValue.(map[string]any)
+		if !ok1 || !ok2 {
+			return errors.New("values must be maps for non-clustered index")
 		}
-		return im.bTree.Insert(newKey, extractNonClusteredValue(newRow, im.indexDef))
+		if compareKeys(oldKey, newKey) != 0 {
+			if err = im.bTree.Delete(oldKey); err == nil {
+				err = im.bTree.Insert(newKey, extractNonClusteredValue(newRow, im.indexDef))
+			}
+		} else {
+			err = im.bTree.Update(oldKey, extractNonClusteredValue(newRow, im.indexDef))
+		}
 	}
-	return im.bTree.Update(oldKey, extractNonClusteredValue(newRow, im.indexDef))
+	if err == nil {
+		im.rootNodeID = im.bTree.RootID()
+		saveRootNodeID(im.indexPath, im.rootNodeID)
+	}
+	return err
 }
 
 // Delete removes an entry from the index.
@@ -153,7 +186,12 @@ func (im *IndexManager) Delete(key []any) error {
 	if im.bTree == nil {
 		return errors.New("BTree not initialized")
 	}
-	return im.bTree.Delete(key)
+	err := im.bTree.Delete(key)
+	if err == nil {
+		im.rootNodeID = im.bTree.RootID()
+		saveRootNodeID(im.indexPath, im.rootNodeID)
+	}
+	return err
 }
 
 // Search finds entries in the index based on a key or a range of keys.
